@@ -419,13 +419,13 @@ def create_webhook_app(bot_controller_instance):
             return 'Error', 500
         
     @flask_app.route("/sub/<sub_uuid>")
-    async def serve_subscription(sub_uuid: str):
+    def serve_subscription(sub_uuid: str):
         user_id = get_user_id_by_subscription_uuid(sub_uuid)
         if not user_id:
             return "Not found", 404
 
         try:
-            proxies = await key_manager.create_keys_on_all_hosts_and_get_clash_proxies(user_id)
+            proxies = key_manager.create_keys_on_all_hosts_and_get_clash_proxies(user_id)
             if not proxies:
                 return "No proxies available", 404
 
