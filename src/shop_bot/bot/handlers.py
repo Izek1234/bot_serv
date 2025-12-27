@@ -42,8 +42,9 @@ from shop_bot.data_manager.database import (
     update_key_info, set_trial_used, set_terms_agreed, get_setting, get_all_hosts,
     get_plans_for_host, get_plan_by_id, log_transaction, get_referral_count,
     add_to_referral_balance, create_pending_transaction, get_all_users,
-    set_referral_balance, set_referral_balance_all
+    set_referral_balance, set_referral_balance_all,create_subscription_link
 )
+
 
 from shop_bot.config import (
     get_profile_text, get_vpn_active_text, VPN_INACTIVE_TEXT, VPN_NO_DATA_TEXT,
@@ -199,53 +200,29 @@ def get_user_router() -> Router:
     @registration_required
     async def get_full_subscription_handler(callback: types.CallbackQuery):
         user_id = callback.from_user.id
-        await callback.answer("Создаём подписку на все серверы...", show_alert=True)
+        await callback.answer("Генерируем ссылку на подписку...", show_alert=True)
 
         try:
-            proxies = await key_manager.create_keys_on_all_hosts_and_get_clash_proxies(user_id)
+            # Генерируем или получаем UUID подписки
+            sub_uuid = create_subscription_link(user_id)
 
-            if not proxies:
-                await callback.message.answer(
-                    "❌ Не удалось создать подписку. Возможно, нет активных серверов или ошибка конфигурации.",
-                    reply_markup=keyboards.create_back_to_menu_keyboard()
-                )
-                return
+            # ⚠️ ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ ДОМЕН!
+            YOUR_DOMAIN = "5.129.210.237"  # ← сюда ваш домен
 
-            # Только то, что нужно для подписки Clash Meta
-            clash_config = {
-                "proxies": proxies,
-                "proxy-groups": [
-                    {
-                        "name": "🚀 Все серверы",
-                        "type": "select",
-                        "proxies": [p["name"] for p in proxies]
-                    }
-                ],
-                "rules": ["MATCH,🚀 Все серверы"]
-            }
-
-            yaml_str = yaml.dump(
-                clash_config,
-                allow_unicode=True,
-                default_flow_style=False,
-                sort_keys=False,
-                indent=2,
-                width=1000  # избегаем разбивки длинных строк
-            )
-
-            sub_b64 = base64.b64encode(yaml_str.encode("utf-8")).decode("utf-8")
+            sub_url = f"https://{YOUR_DOMAIN}/sub/{sub_uuid}"
 
             await callback.message.answer(
-                "✅ <b>Ваша Clash Meta-подписка на все серверы:</b>\n\n"
-                "<code>{}</code>".format(sub_b64),
+                "✅ <b>Ваша персональная ссылка на подписку:</b>\n\n"
+                f"<code>{sub_url}</code>\n\n"
+                "📎 Скопируйте её и добавьте в <b>Clash Meta</b>, <b>Stash</b> или <b>NekoBox</b>.",
                 parse_mode="HTML",
                 reply_markup=keyboards.create_back_to_menu_keyboard()
             )
 
         except Exception as e:
-            logger.error(f"Ошибка при создании Clash-подписки для {user_id}: {e}", exc_info=True)
+            logger.error(f"Ошибка при создании ссылки для {user_id}: {e}", exc_info=True)
             await callback.message.answer(
-                "❌ Ошибка при генерации подписки. Обратитесь к администратору.",
+                "❌ Не удалось создать ссылку. Попробуйте позже.",
                 reply_markup=keyboards.create_back_to_menu_keyboard()
             )
 

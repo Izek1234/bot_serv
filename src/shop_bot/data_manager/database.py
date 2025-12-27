@@ -3,6 +3,7 @@ from datetime import datetime
 import logging
 from pathlib import Path
 import json
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,15 @@ def initialize_db():
                     referred_by INTEGER,
                     referral_balance REAL DEFAULT 0,
                     referral_balance_all REAL DEFAULT 0
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS subscription_links (
+                    uuid TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    expires_at TIMESTAMP, 
+                    FOREIGN KEY (user_id) REFERENCES users (telegram_id)
                 )
             ''')
             cursor.execute('''
@@ -125,6 +135,25 @@ def initialize_db():
             logging.info("Database initialized successfully.")
     except sqlite3.Error as e:
         logging.error(f"Database error on initialization: {e}")
+
+
+def create_subscription_link(user_id: int) -> str:
+    sub_uuid = str(uuid.uuid4())
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.execute(
+            "INSERT INTO subscription_links (uuid, user_id) VALUES (?, ?)",
+            (sub_uuid, user_id)
+        )
+    return sub_uuid
+
+def get_user_id_by_subscription_uuid(sub_uuid: str) -> int | None:
+    """По UUID подписки возвращает user_id."""
+    with sqlite3.connect(DB_FILE) as conn:
+        row = conn.execute(
+            "SELECT user_id FROM subscription_links WHERE uuid = ?",
+            (sub_uuid,)
+        ).fetchone()
+    return row[0] if row else None
 
 def run_migration():
     if not DB_FILE.exists():

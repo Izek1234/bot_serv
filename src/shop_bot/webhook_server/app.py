@@ -5,10 +5,11 @@ import json
 import hashlib
 import base64
 from hmac import compare_digest
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from math import ceil
-from flask import Flask, request, render_template, redirect, url_for, flash, session, current_app
+from flask import Flask, request, render_template, redirect, url_for, flash, session, current_app, make_response
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,8 +21,13 @@ from shop_bot.data_manager.database import (
     create_host, delete_host, create_plan, delete_plan, get_user_count,
     get_total_keys_count, get_total_spent_sum, get_daily_stats_for_charts,
     get_recent_transactions, get_paginated_transactions, get_all_users, get_user_keys,
-    ban_user, unban_user, delete_user_keys, get_setting, find_and_complete_ton_transaction
+    ban_user, unban_user, delete_user_keys, get_setting, find_and_complete_ton_transaction, get_user_id_by_subscription_uuid
 )
+import yaml
+import base64 as b64
+
+from shop_bot.modules import key_manager
+
 
 _bot_controller = None
 
@@ -411,5 +417,53 @@ def create_webhook_app(bot_controller_instance):
         except Exception as e:
             logger.error(f"Error in ton webhook handler: {e}", exc_info=True)
             return 'Error', 500
+        
+    @flask_app.route("/sub/<sub_uuid>")
+    async def serve_subscription(sub_uuid: str):
+        user_id = get_user_id_by_subscription_uuid(sub_uuid)
+        if not user_id:
+            return "Not found", 404
+
+        try:
+            proxies = await key_manager.create_keys_on_all_hosts_and_get_clash_proxies(user_id)
+            if not proxies:
+                return "No proxies available", 404
+
+            # Настройки подписки
+            clash_config = {
+                "proxies": proxies,
+                "proxy-groups": [
+                    {"name": "🚀 Все серверы", "type": "select", "proxies": [p["name"] for p in proxies]}
+                ],
+                "rules": ["MATCH,🚀 Все серверы"]
+            }
+
+            yaml_str = yaml.dump(
+                clash_config,
+                allow_unicode=True,
+                default_flow_style=False,
+                sort_keys=False,
+                indent=2,
+            )
+
+            # Определяем дату окончания (например, текущая + trial_days)
+            from shop_bot.data_manager.database import get_setting
+            trial_days = int(get_setting("trial_duration_days") or 1)
+            expiry_timestamp = int((datetime.now() + timedelta(days=trial_days)).timestamp())
+
+            # Формируем ответ
+            resp = make_response(yaml_str)
+            resp.headers["Content-Type"] = "text/yaml; charset=utf-8"
+            resp.headers["Profile-Title"] = "base64:" + b64.b64encode("Мой VPN".encode()).decode()
+            resp.headers["Profile-Update-Interval"] = "12"
+            resp.headers["Subscription-Userinfo"] = f"upload=0; download=0; total=0; expire={expiry_timestamp}"
+            resp.headers["Update-Always"] = "true"
+
+            return resp
+
+        except Exception as e:
+            logger.error(f"Ошибка в эндпоинте /sub/{sub_uuid}: {e}")
+            return "Internal error", 500
 
     return flask_app
+
