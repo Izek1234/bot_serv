@@ -2,6 +2,8 @@ import logging
 from datetime import datetime, timedelta
 from shop_bot.data_manager.database import add_new_key, get_setting
 from shop_bot.modules.xui_api import create_or_update_key_on_host  # ✅ существует
+import urllib.parse
+
 
 logger = logging.getLogger(__name__)
 
@@ -15,100 +17,149 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-async def create_keys_on_all_hosts_and_get_proxies(user_id: int) -> list[dict]:
+async def create_keys_on_all_hosts_and_get_clash_proxies(user_id: int) -> list[dict]:
     hosts = get_all_hosts()
     if not hosts:
-        logger.warning("No hosts found for subscription!")
+        logger.warning("No hosts available.")
         return []
 
     proxies = []
-    now = datetime.now()
     duration_days = int(get_setting("trial_duration_days") or 1)
-    expiry_timestamp = int((now + timedelta(days=duration_days)).timestamp())
+    expiry_timestamp = int((datetime.now() + timedelta(days=duration_days)).timestamp())
 
     for host in hosts:
         host_name = host.get("host_name")
         if not host_name:
-            logger.error("Host missing 'host_name', skipping.")
             continue
 
-        try:
-            email = f"{user_id}_{int(now.timestamp())}@{host_name}"
+        email = f"{user_id}_{int(datetime.now().timestamp())}@{host_name}"
 
-            # Создаём ключ на хосте
-            proxy_config = await create_or_update_key_on_host(
+        try:
+            result = await create_or_update_key_on_host(
                 host_name=host_name,
                 email=email,
                 days_to_add=duration_days
             )
 
-            # Поддерживаем оба варианта: "uuid" и "client_uuid"
-            uuid_val = None
-            if proxy_config:
-                uuid_val = proxy_config.get("uuid") or proxy_config.get("client_uuid")
-            if not uuid_val:
-                logger.error(f"Key creation succeeded on x-ui, but UUID is missing for {host_name}. Result: {proxy_config}")
+            if not result or not result.get("connection_string"):
+                logger.error(f"No connection_string for {host_name}")
                 continue
 
-            # Обязательные параметры хоста
-            address = host.get("address")
-            port = host.get("port")
-            if not address or not port:
-                logger.error(f"Host '{host_name}' missing 'address' or 'port', skipping.")
+            # Парсим URI → Clash-прокси
+            proxy = parse_vless_uri_to_clash(result["connection_string"])
+            if not proxy:
+                logger.error(f"Failed to parse connection_string for {host_name}")
                 continue
-
-            # Опциональные параметры с безопасными значениями по умолчанию
-            network = host.get("network", "tcp")
-            tls = host.get("tls", True)
-            sni = host.get("sni") or address
-            flow = host.get("flow")  # может быть None или строка
-            path = host.get("path", "/")
-            host_header = host.get("host_header") or (sni if tls else address)
-            fingerprint = host.get("fingerprint", "chrome")
-            display_name = host.get("display_name") or host_name
-
-            # Формируем прокси для Clash Meta
-            proxy = {
-                "name": display_name,
-                "type": "vless",
-                "server": address,
-                "port": port,
-                "uuid": uuid_val,
-                "network": network,
-                "tls": bool(tls),
-                "udp": True,
-                "skip-cert-verify": True,
-            }
-
-            # TLS-настройки
-            if tls:
-                proxy["servername"] = sni
-                proxy["fingerprint"] = fingerprint
-
-            # WebSocket
-            if network == "ws":
-                proxy["ws-opts"] = {
-                    "path": path,
-                    "headers": {"Host": host_header}
-                }
-
-            # Flow (только если задан и поддерживается)
-            if flow:
-                proxy["flow"] = flow
 
             # Сохраняем в БД
             add_new_key(
                 user_id=user_id,
                 host_name=host_name,
-                client_id=uuid_val,
-                email=email,
-                expiry=int(expiry_timestamp * 1000)
+                xui_client_uuid=result["client_uuid"],
+                key_email=email,
+                expiry_timestamp_ms=int(expiry_timestamp * 1000)
             )
 
             proxies.append(proxy)
 
         except Exception as e:
-            logger.error(f"Unexpected error creating key on {host_name} for {user_id}: {e}", exc_info=True)
-            continue
+            logger.error(f"Error on {host_name}: {e}", exc_info=True)
 
     return proxies
+
+def parse_vless_uri_to_clash(uri: str) -> dict | None:
+    if not uri or not uri.startswith("vless://"):
+        return None
+
+    try:
+        # Убираем схему
+        s = uri[8:]
+
+        # Извлекаем имя (после #)
+        if "#" in s:
+            s, name = s.split("#", 1)
+            name = urllib.parse.unquote(name)
+        else:
+            name = "VLESS"
+
+        # Разделяем UUID@host:port и параметры
+        if "?" in s:
+            main_part, query_part = s.split("?", 1)
+        else:
+            main_part, query_part = s, ""
+
+        # UUID и адрес
+        uuid, host_port = main_part.split("@", 1)
+        if ":" in host_port:
+            server, port_str = host_port.rsplit(":", 1)
+            port = int(port_str)
+        else:
+            server = host_port
+            port = 443
+
+        # Парсим параметры
+        params = urllib.parse.parse_qs(query_part, keep_blank_values=True)
+        param = lambda key, default=None: params.get(key, [default])[0]
+
+        network = param("type", "tcp")
+        security = param("security", "")
+        sni = param("sni", server)
+        fp = param("fp", "chrome")
+        flow = param("flow", "")
+
+        proxy = {
+            "name": name,
+            "type": "vless",
+            "server": server,
+            "port": port,
+            "uuid": uuid,
+            "network": network,
+            "udp": True,
+            "skip-cert-verify": True,
+        }
+
+        if security == "reality":
+            proxy["reality"] = True
+            proxy["fingerprint"] = fp
+            proxy["server"] = server
+            proxy["port"] = port
+
+            pbk = param("pbk")
+            if pbk:
+                proxy["public-key"] = pbk
+
+            sid = param("sid")
+            if sid:
+                proxy["short-id"] = sid
+
+            spx = param("spx")
+            if spx:
+                proxy["spider-x"] = urllib.parse.unquote(spx)
+
+            if sni:
+                proxy["servername"] = sni
+
+        elif security == "tls":
+            proxy["tls"] = True
+            proxy["fingerprint"] = fp
+            proxy["servername"] = sni
+
+        else:
+            # Без шифрования (небезопасно, но возможно)
+            pass
+
+        if flow:
+            proxy["flow"] = flow
+
+        # WebSocket (если network=ws)
+        if network == "ws":
+            proxy["ws-opts"] = {
+                "path": param("path", "/"),
+                "headers": {"Host": param("host", sni)}
+            }
+
+        return proxy
+
+    except Exception as e:
+        logger.error(f"Failed to parse VLESS URI: {e}")
+        return None
