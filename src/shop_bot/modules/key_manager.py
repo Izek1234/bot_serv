@@ -22,9 +22,7 @@ async def create_keys_on_all_hosts_and_get_links(user_id: int) -> list[str]:
 
     # Настройки ключа
     duration_days = int(get_setting("trial_duration_days") or 1)
-    traffic_gb = int(get_setting("trial_traffic_gb") or 1)
     expiry = now + timedelta(days=duration_days)
-    traffic_limit = traffic_gb * (1024 ** 3)  # в байтах
 
     for host in hosts:
         host_name = host["host_name"]
@@ -41,7 +39,6 @@ async def create_keys_on_all_hosts_and_get_links(user_id: int) -> list[str]:
             if result:
                 client_id = result["client_uuid"]
                 link = result["connection_string"]
-                expiry_timestamp_ms = result["expiry_timestamp_ms"]  # для сохранения в БД
             else:
                 logger.error(f"Не удалось создать ключ на {host_name}")
                 continue
