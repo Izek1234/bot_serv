@@ -79,6 +79,7 @@ def create_host_selection_keyboard(hosts: list, action: str) -> InlineKeyboardMa
     for host in hosts:
         callback_data = f"select_host_{action}_{host['host_name']}"
         builder.button(text=host['host_name'], callback_data=callback_data)
+    builder.button(text="🌐 Подписка на все серверы", callback_data="get_full_subscription")
     builder.button(text="⬅️ Назад", callback_data="manage_keys" if action == 'new' else "back_to_main_menu")
     builder.adjust(1)
     return builder.as_markup()
