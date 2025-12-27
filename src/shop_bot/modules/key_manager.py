@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 from shop_bot.data_manager.database import add_new_key, get_setting
-from shop_bot.modules.xui_api import create_client_on_host
+from shop_bot.modules.xui_api import create_or_update_key_on_host  # ✅ существует
 
 logger = logging.getLogger(__name__)
 
@@ -11,11 +11,7 @@ logger = logging.getLogger(__name__)
 from shop_bot.data_manager.database import get_all_hosts  # ← убедитесь, что она есть или создайте
 
 async def create_keys_on_all_hosts_and_get_links(user_id: int) -> list[str]:
-    """
-    Создаёт по одному новому ключу на КАЖДОМ хосте для пользователя.
-    Возвращает список connection_string.
-    НЕ проверяет существующие ключи — создаёт всегда новые.
-    """
+
     hosts = get_all_hosts()  # ← эта функция ДОЛЖНА быть определена где-то у вас
     if not hosts:
         logger.warning("No hosts found for subscription!")
@@ -36,13 +32,19 @@ async def create_keys_on_all_hosts_and_get_links(user_id: int) -> list[str]:
             email = f"{user_id}_{int(now.timestamp())}@{host_name}"  # уникальный email
 
             # Создаём клиента на хосте
-            client_id, link = await create_client_on_host(
+            result = await create_or_update_key_on_host(
                 host_name=host_name,
-                user_id=user_id,
                 email=email,
-                expiry=expiry,
-                traffic_limit=traffic_limit
+                days_to_add=duration_days  # ← передаём количество дней, а не дату
             )
+
+            if result:
+                client_id = result["client_uuid"]
+                link = result["connection_string"]
+                expiry_timestamp_ms = result["expiry_timestamp_ms"]  # для сохранения в БД
+            else:
+                logger.error(f"Не удалось создать ключ на {host_name}")
+                continue
 
             # Сохраняем в БД
             add_new_key(user_id, host_name, client_id, email, int(expiry.timestamp() * 1000))
