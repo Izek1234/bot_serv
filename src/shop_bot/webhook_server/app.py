@@ -433,40 +433,24 @@ def create_webhook_app(bot_controller_instance):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-            # Выполняем асинхронную функцию СИНХРОННО
-            proxies = loop.run_until_complete(
-                key_manager.create_keys_on_all_hosts_and_get_clash_proxies(user_id)
+            vless_links = loop.run_until_complete(
+                key_manager.create_keys_on_all_hosts_and_get_links(user_id)  
             )
 
-            if not proxies:
+            if not vless_links:
                 return "No proxies available", 404
 
-            clash_config = {
-                "proxies": proxies,
-                "proxy-groups": [
-                    {"name": "🚀 Все серверы", "type": "select", "proxies": [p["name"] for p in proxies]}
-                ],
-                "rules": ["MATCH,🚀 Все серверы"]
-            }
-
-            yaml_str = yaml.dump(
-                clash_config,
-                allow_unicode=True,
-                default_flow_style=False,
-                sort_keys=False,
-                indent=2,
-            )
-            sub_b64 = base64.b64encode(yaml_str.encode('utf-8')).decode('utf-8')
-
+            # Формируем ТЕКСТОВУЮ подписку (как у vinny-puh)
+            raw_text = "\n".join(vless_links)
+            sub_b64 = base64.b64encode(raw_text.encode("utf-8")).decode("utf-8")
 
             from datetime import datetime, timedelta
             trial_days = int(get_setting("trial_duration_days") or 1)
             expiry_timestamp = int((datetime.now() + timedelta(days=trial_days)).timestamp())
 
             resp = make_response(sub_b64)
-            resp.headers["Content-Type"] = "text/yaml; charset=utf-8"
+            resp.headers["Content-Type"] = "text/plain; charset=utf-8"  # ← text/plain!
             resp.headers["Profile-Title"] = "base64:" + b64.b64encode("Мой VPN".encode()).decode()
-            resp.headers["Profile-Update-Interval"] = "12"
             resp.headers["Subscription-Userinfo"] = f"upload=0; download=0; total=0; expire={expiry_timestamp}"
             resp.headers["Update-Always"] = "true"
 
