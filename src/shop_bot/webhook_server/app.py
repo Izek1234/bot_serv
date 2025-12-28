@@ -456,12 +456,14 @@ def create_webhook_app(bot_controller_instance):
                 sort_keys=False,
                 indent=2,
             )
+            sub_b64 = base64.b64encode(yaml_str.encode('utf-8')).decode('utf-8')
+
 
             from datetime import datetime, timedelta
             trial_days = int(get_setting("trial_duration_days") or 1)
             expiry_timestamp = int((datetime.now() + timedelta(days=trial_days)).timestamp())
 
-            resp = make_response(yaml_str)
+            resp = make_response(sub_b64)
             resp.headers["Content-Type"] = "text/yaml; charset=utf-8"
             resp.headers["Profile-Title"] = "base64:" + b64.b64encode("Мой VPN".encode()).decode()
             resp.headers["Profile-Update-Interval"] = "12"
