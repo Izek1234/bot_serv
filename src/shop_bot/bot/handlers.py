@@ -207,7 +207,7 @@ def get_user_router() -> Router:
             sub_uuid = create_subscription_link(user_id)
 
             # ⚠️ ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ ДОМЕН!
-            YOUR_DOMAIN = "213.176.74.138"  # ← сюда ваш домен
+            YOUR_DOMAIN = "213.176.74.138:1488"  # ← сюда ваш домен
 
             sub_url = f"http://{YOUR_DOMAIN}/sub/{sub_uuid}"
 
