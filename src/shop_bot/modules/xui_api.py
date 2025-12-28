@@ -13,7 +13,7 @@ import json
 
 logger = logging.getLogger(__name__)
 
-
+from urllib.parse import quote
 
 
 def login_to_host(host_url: str, username: str, password: str, inbound_id: int) -> tuple[Api | None, Inbound | None]:
@@ -32,82 +32,66 @@ def login_to_host(host_url: str, username: str, password: str, inbound_id: int) 
         return None, None
 
 
-def get_connection_string(inbound, user_uuid: str, host_url: str, remark: str) -> str | None:
+
+def get_connection_string(
+    inbound,
+    user_uuid: str,
+    host_url: str,
+    remark: str
+) -> str | None:
     """
-    Генерирует VLESS URI для клиента.
-    `inbound` — объект Inbound из py3xui (Pydantic-модель).
+    Generate a universal connection URI for various protocols and stream settings.
+
+    Supports:
+      - Protocol: VLESS, VMess, Trojan
+      - Stream: reality, TLS, plain TCP/WS
     """
-    if not inbound:
-        return None
+    protocol = inbound.protocol.lower()
+    port = inbound.port
+    stream = inbound.stream_settings
 
-    try:
-        # Извлекаем данные из Pydantic-моделей
-        port = inbound.port
-        settings = inbound.settings  # Settings (Pydantic)
-        stream = inbound.stream_settings  # StreamSettings (Pydantic)
-        logger.error(inbound)
-        if not stream:
-            logger.error("StreamSettings is None")
-            return None
+    # Base URI parts
+    uuid_or_email = user_uuid 
+    base = f"{protocol}://{uuid_or_email}@{host_url}:{port}"
 
-        # Основные параметры
-        network = getattr(stream, "network", "tcp")
-        security = getattr(stream, "security", "none")
-        server = urlparse(host_url).hostname
+    # Common query params
+    params = {}
 
-        if not server:
-            logger.error(f"Cannot parse hostname from host_url: {host_url}")
-            return None
+    # Stream-specific settings
+    if stream.network:
+        params["type"] = stream.network
 
-        # Ищем flow у клиента
-        flow = ""
-        if settings and hasattr(settings, "clients"):
-            for client in settings.clients:
-                if getattr(client, "id", None) == user_uuid:
-                    flow = getattr(client, "flow", "")
-                    break
+    if stream.security == "reality":
+        reality = stream.reality_settings or {}
+        settings = reality.get("settings", {})
+        server_names = reality.get("serverNames", [])
+        short_ids = reality.get("shortIds", [])
 
-        # Собираем параметры вручную (без .get())
-        params = [f"type={network}", f"security={security}"]
+        params.update({
+            "security": "reality",
+            "pbk": settings.get("publicKey"),
+            "fp": settings.get("fingerprint", "chrome"),
+            "sni": server_names[0] if server_names else "",
+            "sid": short_ids[0] if short_ids else "",
+            "spx": quote(settings.get("spiderX", "/"))
+        })
+    elif stream.security == "tls":
+        params["security"] = "tls"
+        sni = (stream.tls_settings or {}).get("serverName")
+        if sni:
+            params["sni"] = sni
+        params["fp"] = "chrome"  # optional default
+    else:
+        # No encryption
+        if protocol != "trojan":
+            params["security"] = "none"
 
-        if security == "reality":
-            reality = getattr(stream, "reality_settings", None)
-            if not reality:
-                logger.error("REALITY enabled but reality_settings is missing")
-                return None
+    # Build query string
+    query_items = [f"{k}={quote(str(v))}" for k, v in params.items() if v not in (None, "")]
+    query = "&".join(query_items)
+    fragment = f"{remark}-{user_uuid}"
 
-            pbk = getattr(reality, "public_key", None)
-            short_ids = getattr(reality, "short_ids", [])
-            server_names = getattr(reality, "server_names", [])
-            fingerprint = getattr(reality, "fingerprint", "chrome")
-
-            if not (pbk and short_ids and server_names):
-                logger.error("Missing REALITY parameters: pbk, short_ids, or server_names")
-                return None
-
-            params.extend([
-                f"pbk={pbk}",
-                f"sid={short_ids[0]}",
-                f"sni={server_names[0]}",
-                f"fp={fingerprint}",
-                "spx=%2F"
-            ])
-
-        elif security == "tls":
-            tls = getattr(stream, "tls_settings", None)
-            sni = getattr(tls, "server_name", server) if tls else server
-            params.append(f"sni={sni}")
-            params.append("fp=chrome")
-
-        if flow:
-            params.append(f"flow={flow}")
-
-        query = "&".join(params)
-        return f"vless://{user_uuid}@{server}:{port}?{query}#{remark}"
-
-    except Exception as e:
-        logger.error(f"Error generating connection string: {e}", exc_info=True)
-        return None
+    return f"{base}?{query}#{quote(fragment)}"
 
 def update_or_create_client_on_panel(api: Api, inbound_id: int, email: str, days_to_add: int) -> tuple[str | None, int | None]:
     try:
