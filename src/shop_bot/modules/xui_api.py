@@ -9,6 +9,7 @@ from py3xui import Api, Client, Inbound
 from shop_bot.data_manager.database import get_host, get_key_by_email
 import base64
 from shop_bot.data_manager.database import get_user_keys
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -55,28 +56,85 @@ def login_to_host(host_url: str, username: str, password: str, inbound_id: int) 
         logger.error(f"Login or inbound retrieval failed for host '{host_url}': {e}", exc_info=True)
         return None, None
 
+
+
 def get_connection_string(inbound: Inbound, user_uuid: str, host_url: str, remark: str) -> str | None:
-    if not inbound: return None
-    settings = inbound.stream_settings.reality_settings.get("settings")
-    if not settings: return None
-    public_key = settings.get("publicKey")
-    fp = settings.get("fingerprint")
-    server_names = inbound.stream_settings.reality_settings.get("serverNames")
-    short_ids = inbound.stream_settings.reality_settings.get("shortIds")
-    network = inbound.stream_settings.reality_settings.get("network")
-    port = inbound.port
-    
-    if not all([public_key, server_names, short_ids]): return None
-    
-    parsed_url = urlparse(host_url)
-    short_id = short_ids[0]
-    logger.error(parsed_url)
-    connection_string = (
-        f"vless://{user_uuid}@{parsed_url.hostname}:{port}"
-        f"?type={network}&security=reality&pbk={public_key}&fp={fp}&sni={server_names[0]}"
-        f"&sid={short_id}&spx=%2F&flow=xtls-rprx-vision#{remark}"
-    )
-    return connection_string
+    if not inbound:
+        return None
+
+    try:
+        # Парсим settings и streamSettings из JSON-строк
+        settings_dict = json.loads(inbound.settings) if isinstance(inbound.settings, str) else inbound.settings
+        stream_dict = json.loads(inbound.stream_settings) if isinstance(inbound.stream_settings, str) else inbound.stream_settings
+
+        port = inbound.port
+        network = stream_dict.get("network", "tcp")
+        security = stream_dict.get("security", "none")
+
+        parsed_url = urlparse(host_url)
+        server = parsed_url.hostname
+        logger.error(inbound)
+        if not server or not port:
+            logger.error(f"Invalid server or port: {server}:{port}")
+            return None
+
+        # Определяем flow (если есть)
+        clients = settings_dict.get("clients", [])
+        client = next((c for c in clients if c.get("id") == user_uuid), None)
+        flow = client.get("flow", "") if client else ""
+
+        # Базовые параметры
+        base_params = {
+            "type": network,
+            "security": security,
+        }
+
+        # Дополнительные параметры в зависимости от security
+        if security == "reality":
+            reality_settings = stream_dict.get("realitySettings", {})
+            public_key = reality_settings.get("publicKey")
+            short_ids = reality_settings.get("shortIds", [])
+            server_names = reality_settings.get("serverNames", [])
+
+            if not (public_key and short_ids and server_names):
+                logger.error("Missing REALITY parameters")
+                return None
+
+            base_params.update({
+                "pbk": public_key,
+                "sid": short_ids[0],
+                "sni": server_names[0],
+                "fp": reality_settings.get("fingerprint", "chrome"),
+                "spx": "/",
+            })
+
+        elif security == "tls":
+            tls_settings = stream_dict.get("tlsSettings", {})
+            sni = tls_settings.get("serverName", server)
+            base_params.update({
+                "sni": sni,
+                "fp": "chrome",
+            })
+
+        # Flow (если указан)
+        if flow:
+            base_params["flow"] = flow
+
+        # Собираем query-строку
+        query_parts = []
+        for k, v in base_params.items():
+            if v is not None:
+                if isinstance(v, list):
+                    v = ",".join(str(x) for x in v)
+                query_parts.append(f"{k}={v}")
+
+        query = "&".join(query_parts)
+        connection_string = f"vless://{user_uuid}@{server}:{port}?{query}#{remark}"
+        return connection_string
+
+    except Exception as e:
+        logger.error(f"Error generating connection string: {e}", exc_info=True)
+        return None
 
 def update_or_create_client_on_panel(api: Api, inbound_id: int, email: str, days_to_add: int) -> tuple[str | None, int | None]:
     try:
