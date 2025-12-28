@@ -65,7 +65,7 @@ def get_connection_string(inbound: Inbound, user_uuid: str, host_url: str, remar
     server_names = inbound.stream_settings.reality_settings.get("serverNames")
     short_ids = inbound.stream_settings.reality_settings.get("shortIds")
     network = inbound.stream_settings.reality_settings.get("network")
-    port = inbound.portЫ
+    port = inbound.port
     
     if not all([public_key, server_names, short_ids]): return None
     
