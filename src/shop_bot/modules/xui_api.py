@@ -59,21 +59,22 @@ def get_connection_string(inbound: Inbound, user_uuid: str, host_url: str, remar
     if not inbound: return None
     settings = inbound.stream_settings.reality_settings.get("settings")
     if not settings: return None
-    
+    logger.error(settings)
     public_key = settings.get("publicKey")
     fp = settings.get("fingerprint")
     server_names = inbound.stream_settings.reality_settings.get("serverNames")
     short_ids = inbound.stream_settings.reality_settings.get("shortIds")
-    port = inbound.port
+    network = inbound.stream_settings.reality_settings.get("network")
+    port = inbound.portЫ
     
     if not all([public_key, server_names, short_ids]): return None
     
     parsed_url = urlparse(host_url)
     short_id = short_ids[0]
-    
+    logger.error()
     connection_string = (
         f"vless://{user_uuid}@{parsed_url.hostname}:{port}"
-        f"?type=tcp&security=reality&pbk={public_key}&fp={fp}&sni={server_names[0]}"
+        f"?type={network}&security=reality&pbk={public_key}&fp={fp}&sni={server_names[0]}"
         f"&sid={short_id}&spx=%2F&flow=xtls-rprx-vision#{remark}"
     )
     return connection_string
